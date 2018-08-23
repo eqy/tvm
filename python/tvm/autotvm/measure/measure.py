@@ -63,24 +63,24 @@ def measure_option(measure_func,
         and a RPC server silently for the user.
 
         callable: It is a callable function for measurement.
-                  See the return value of measure/measure_methods.py::use_rpc for example.
+                  See the return value of measure/measure_methods.py::use_rpc for an example.
     number : int, optional
         Number of times to do the measurement for average
     repeat : int, optional
         Number of times to repeat the measurement.
         In total, the generated code will be run (1 + number x repeat) times,
         where the first one is warm up. The returned result contains `repeat` costs,
-        each of which is the average of `number` test run.
+        each of which is the average of `number` tests run.
     timeout: int, optional
         Timeout for a whole batch. TimeoutError will be returned as the result if a
         task timeouts.
     parallel_num: int, optional
-        The number of measurement task that can run in parallel.
+        The number of measurement tasks that can run in parallel.
         Set this according to the number of cpu cores (for compilation) and
         the number of devices you have (for measuring generate code).
     do_fork: bool, optional
-        Whether use multiprocessing (based on fork) for running measure jobs in parallel.
-        Set this to False if you want to debug (see trackback) or using fork is not suitable.
+        Whether to use multiprocessing (based on fork) for running measure jobs in parallel.
+        Set this to False if you want to debug (see traceback) or using fork is not suitable.
         NOTE: If this is False, parallel and timeout do not work.
     build_func: str or callable, optional
         'default': call default builder. This works for normal target (llvm, cuda)
@@ -90,7 +90,7 @@ def measure_option(measure_func,
         callable: customized build function for other backends (e.g. VTA).
                   See measure/measure_methods.py::default_build_func for example.
     check_correctness: bool
-        Whether check correctness after measurement. This will use llvm cpu as reference.
+        Whether to check correctness after measurement. This will use llvm + cpu as reference.
     replay_db : Database, optional
         The database that we retrieve saved MeasureResult from.
 
