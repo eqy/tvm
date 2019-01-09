@@ -122,7 +122,7 @@ TVM_REGISTER_API("relay._quantize.annotate")
       }
       return e;
     };
-  return ForwardRewrite(expr, "FQAnnotateRewrite", nullptr, fmulti_ref);
+  return ForwardRewrite(expr, "FQAnnotateRewrite", nullptr, nullptr);
 });
 
 
@@ -289,47 +289,66 @@ RELAY_REGISTER_OP("multiply")
 .set_attr<FForwardRewrite>("FQRealizeRewrite", MulRealize);
 
 
+/* \brief Unify the dom scale of arguments */
+Array<Expr> UnifyDTypeScale(const Array<Expr>& args,
+                            DataType* dtype_ptr,
+                            Expr* scale_ptr) {
+  const QConfig& cfg = QConfig::Current();
+
+  CHECK_EQ(args.size(), 2);
+  CHECK(args[0].as<QRealizeIntExprNode>() && args[1].as<QRealizeIntExprNode>());
+
+  const auto* lhs = args[0].as<QRealizeIntExprNode>();
+  const auto* rhs = args[1].as<QRealizeIntExprNode>();
+  Expr ldata = lhs->data;
+  Expr rdata = rhs->data;
+
+  // unify the data type
+  DataType dtype = cfg->dtype_activation;
+  if (lhs->dtype == Float(32)) {
+    ldata = Cast(ldata, dtype);
+  } else {
+    CHECK_EQ(lhs->dtype, dtype);
+  }
+  if (rhs->dtype == Float(32)) {
+    rdata = Cast(rdata, dtype);
+  } else {
+    CHECK_EQ(rhs->dtype, dtype);
+  }
+
+  // unify the dom_scale
+  // x = a * s1, y = b * s2
+  // x + y = (a * s1 / s2 + b) * s2, if s1 > s2
+  //       = (a + b * s2 / s1) * s1, if s2 > s1
+  Expr dom_scale;
+  float s1 = GetScalarFromConstant<float>(lhs->dom_scale);
+  float s2 = GetScalarFromConstant<float>(rhs->dom_scale);
+  if (s1 > s2) {
+    dom_scale = rhs->dom_scale;
+    ldata = MulAndDiv(ldata, s1, s2);
+  } else if (s1 < s2) {
+    dom_scale = lhs->dom_scale;
+    rdata = MulAndDiv(rdata, s2, s1);
+  } else {
+    dom_scale = lhs->dom_scale;
+  }
+
+  *dtype_ptr = dtype;
+  *scale_ptr = dom_scale;
+  Array<Expr> ret{ldata, rdata};
+  return ret;
+}
+
 Expr AddRealize(const Call& ref_call,
                 const Array<Expr>& new_args,
                 const NodeRef& ctx) {
   const QConfig& cfg = QConfig::Current();
   CHECK_EQ(new_args.size(), 2);
   if (new_args[0].as<QRealizeIntExprNode>() && new_args[1].as<QRealizeIntExprNode>()) {
-    const auto* lhs = new_args[0].as<QRealizeIntExprNode>();
-    const auto* rhs = new_args[1].as<QRealizeIntExprNode>();
-    Expr ldata = lhs->data;
-    Expr rdata = rhs->data;
-
-    // unify the data type
-    DataType dtype = cfg->dtype_activation;
-    if (lhs->dtype == Float(32)) {
-      ldata = Cast(ldata, dtype);
-    } else {
-      CHECK_EQ(lhs->dtype, dtype);
-    }
-    if (rhs->dtype == Float(32)) {
-      rdata = Cast(rdata, dtype);
-    } else {
-      CHECK_EQ(rhs->dtype, dtype);
-    }
-
-    // unify the dom_scale
-    // x = a * s1, y = b * s2
-    // x + y = (a * s1 / s2 + b) * s2, if s1 > s2
-    //       = (a + b * s2 / s1) * s1, if s2 > s1
+    DataType dtype;
     Expr dom_scale;
-    float s1 = GetScalarFromConstant<float>(lhs->dom_scale);
-    float s2 = GetScalarFromConstant<float>(rhs->dom_scale);
-    if (s1 > s2) {
-      dom_scale = rhs->dom_scale;
-      ldata = MulAndDiv(ldata, s1, s2);
-    } else if (s1 < s2) {
-      dom_scale = lhs->dom_scale;
-      rdata = MulAndDiv(rdata, s2, s1);
-    } else {
-      dom_scale = lhs->dom_scale;
-    }
-    Expr ret = ForwardOp(ref_call, {ldata, rdata});
+    Array<Expr> ret_args = UnifyDTypeScale(new_args, &dtype, &dom_scale);
+    Expr ret = ForwardOp(ref_call, ret_args);
     return QRealizeIntExprNode::make(ret, dom_scale, dtype);
   }
   CHECK(!new_args[0]->derived_from<TempExprNode>() && !new_args[1]->derived_from<TempExprNode>());
@@ -340,7 +359,33 @@ RELAY_REGISTER_OP("add")
 .set_attr<FForwardRewrite>("FQRealizeRewrite", AddRealize);
 
 
-/* \brief do nothing */
+Expr ConcatenateRealize(const Call& ref_call,
+                        const Array<Expr>& new_args,
+                        const NodeRef& ctx) {
+  const QConfig& cfg = QConfig::Current();
+  CHECK_EQ(new_args.size(), 1);
+
+  LOG(INFO) << "tuple: " << new_args[0];
+  const auto* tuple = new_args[0].as<TupleNode>();
+  CHECK(tuple);
+  const Array<Expr>& arr = tuple->fields;
+
+  if (arr[0].as<QRealizeIntExprNode>() && arr[1].as<QRealizeIntExprNode>()) {
+    DataType dtype;
+    Expr dom_scale;
+    Array<Expr> ret_args = UnifyDTypeScale(arr, &dtype, &dom_scale);
+    Expr ret = ForwardOp(ref_call, {TupleNode::make(ret_args)});
+    return QRealizeIntExprNode::make(ret, dom_scale, dtype);
+  }
+  CHECK(!new_args[0]->derived_from<TempExprNode>() && !new_args[1]->derived_from<TempExprNode>());
+  return Expr(nullptr);
+}
+
+RELAY_REGISTER_OP("concatenate")
+.set_attr<FForwardRewrite>("FQRealizeRewrite", ConcatenateRealize);
+
+
+/* \brief forward the original operator */
 Expr IdentityRealize(const Call& ref_call,
                      const Array<Expr>& new_args,
                      const NodeRef& ctx) {
@@ -355,6 +400,25 @@ Expr IdentityRealize(const Call& ref_call,
 
 RELAY_REGISTER_OP("nn.relu")
 .set_attr<FForwardRewrite>("FQRealizeRewrite", IdentityRealize);
+
+
+Expr PoolRealize(const Call& ref_call,
+                 const Array<Expr>& new_args,
+                 const NodeRef& ctx) {
+  CHECK_EQ(new_args.size(), 1);
+  if (const auto* n = new_args[0].as<QRealizeIntExprNode>()) {
+    Expr ret = ForwardOp(ref_call, {n->data});
+    return QRealizeIntExprNode::make(ret, n->dom_scale, n->dtype);
+  }
+  CHECK(!new_args[0]->derived_from<TempExprNode>());
+  return Expr(nullptr);
+}
+
+RELAY_REGISTER_OP("nn.max_pool2d")
+.set_attr<FForwardRewrite>("FQRealizeRewrite", PoolRealize);
+
+RELAY_REGISTER_OP("nn.avg_pool2d")
+.set_attr<FForwardRewrite>("FQRealizeRewrite", PoolRealize);
 
 
 TVM_REGISTER_API("relay._quantize.realize")
@@ -417,7 +481,8 @@ TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable)
   p->stream << "global_scale=" << op->global_scale << ", ";
   p->stream << "skip_k_conv==" << op->skip_k_conv << ", ";
   p->stream << "round_for_shift==" << op->round_for_shift << ", ";
-  p->stream << "store_lowbit_output==" << op->store_lowbit_output;
+  p->stream << "store_lowbit_output==" << op->store_lowbit_output << ", ";
+  p->stream << "debug_enabled_ops==" << op->debug_enabled_ops;
   p->stream << ")";
 });
 

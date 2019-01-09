@@ -54,7 +54,21 @@ def register_annotate_function(op_name, frewrite=None, level=10):
     level : int, optional
         The priority level
     """
-    return _op.register(op_name, "FQAnnotateRewrite", frewrite, level)
+    def default_rewrite(ref_call, new_args, ctx):
+        # recover from QAnnotateExpr
+        args = [_get_expr_kind(x)[0] for x in new_args]
+        return _forward_op(ref_call, args)
+
+    def _register(func):
+        """internal register function"""
+        def frewrite_with_guard(ref_call, new_args, ctx):
+            if not current_qconfig().guard(ref_call):
+                return default_rewrite(ref_call, new_args, ctx)
+            return func(ref_call, new_args, ctx)
+        _op.op._Register(op_name, "FQAnnotateRewrite", frewrite_with_guard, level)
+        return frewrite_with_guard
+
+    return _register(frewrite) if frewrite is not None else _register
 
 
 @register_func("relay.quantize.attach_simulated_quantize")
@@ -148,3 +162,37 @@ def identity_rewrite(ref_call, new_args, ctx):
 
 
 register_annotate_function("nn.relu", identity_rewrite)
+
+
+def pool2d_rewrite(ref_call, new_args, ctx):
+    if _conv_counter() <= current_qconfig().skip_k_conv:
+        return None
+
+    x_expr, x_kind = _get_expr_kind(new_args[0])
+    if x_kind is None:
+        return None
+    else:
+        assert x_kind == QAnnotateKind.ACTIVATION
+        expr = attach_simulated_quantize(x_expr, QAnnotateKind.INPUT)
+        expr = _forward_op(ref_call, [expr])
+        return QAnnotateExpr(expr, QAnnotateKind.INPUT)
+
+
+register_annotate_function("nn.max_pool2d", pool2d_rewrite)
+register_annotate_function("nn.avg_pool2d", pool2d_rewrite)
+
+
+@register_annotate_function("concatenate")
+def concatenate_rewrite(ref_call, new_args, ctx):
+    if _conv_counter() <= current_qconfig().skip_k_conv:
+        return None
+
+    lhs_expr, lhs_kind = _get_expr_kind(new_args[0][0])
+    rhs_expr, rhs_kind = _get_expr_kind(new_args[0][1])
+
+    if lhs_kind is None and rhs_kind is None:
+        return None
+
+    assert lhs_kind is not None and rhs_kind is not None
+    expr = _forward_op(ref_call, [_expr.Tuple([lhs_expr, rhs_expr])])
+    return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)

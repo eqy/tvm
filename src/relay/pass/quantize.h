@@ -109,6 +109,7 @@ class QConfigNode : public Node {
   int skip_k_conv = 1;
   bool round_for_shift = true;
   bool store_lowbit_output = true;
+  Array<Expr> debug_enabled_ops = Array<Expr>(NodePtr<Node>(nullptr));
 
   void VisitAttrs(AttrVisitor* v) final {
     v->Visit("nbit_input", &nbit_input);
@@ -121,6 +122,7 @@ class QConfigNode : public Node {
     v->Visit("skip_k_conv", &skip_k_conv);
     v->Visit("round_for_shift", &round_for_shift);
     v->Visit("store_lowbit_output", &store_lowbit_output);
+    v->Visit("debug_enabled_ops", &debug_enabled_ops);
   }
 
   static constexpr const char* _type_key = "relay.quantize.QConfig";

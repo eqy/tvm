@@ -55,6 +55,7 @@ class QConfig(NodeBase):
         "skip_k_conv": 1,
         "round_for_shift": True,
         "store_lowbit_output": True,
+        "debug_enabled_ops": None,
     }
 
     # pylint: disable=no-member
@@ -68,6 +69,14 @@ class QConfig(NodeBase):
         """
         super(QConfig, self).__init__(handle)
         self.handle = handle
+
+    def guard(self, ref_call):
+        op_name = ref_call.op.name
+        if self.debug_enabled_ops is not None:
+            name_list = [x.value for x in self.debug_enabled_ops]
+            if op_name not in name_list:
+                return False
+        return True
 
     def get_nbit_by_kind(self, kind):
         name = kind2str(kind)
