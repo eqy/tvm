@@ -143,7 +143,10 @@ def add_rewrite(ref_call, new_args, ctx):
     elif lhs_kind is None and rhs_kind is not None:
         lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT)
     elif lhs_kind is not None and rhs_kind is None:
-        rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
+        if isinstance(rhs_expr, _expr.Constant):
+            rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
+        else:
+            rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.INPUT)
 
     expr = _forward_op(ref_call, [lhs_expr, rhs_expr])
     return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
@@ -162,24 +165,25 @@ def identity_rewrite(ref_call, new_args, ctx):
 
 
 register_annotate_function("nn.relu", identity_rewrite)
+register_annotate_function("strided_slice", identity_rewrite)
+register_annotate_function("nn.avg_pool2d", identity_rewrite)
 
 
 def pool2d_rewrite(ref_call, new_args, ctx):
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
 
-    x_expr, x_kind = _get_expr_kind(new_args[0])
+    expr, x_kind = _get_expr_kind(new_args[0])
     if x_kind is None:
         return None
     else:
-        assert x_kind == QAnnotateKind.ACTIVATION
-        expr = attach_simulated_quantize(x_expr, QAnnotateKind.INPUT)
+        if x_kind == QAnnotateKind.ACTIVATION:
+            expr = attach_simulated_quantize(expr, QAnnotateKind.INPUT)
         expr = _forward_op(ref_call, [expr])
         return QAnnotateExpr(expr, QAnnotateKind.INPUT)
 
 
 register_annotate_function("nn.max_pool2d", pool2d_rewrite)
-register_annotate_function("nn.avg_pool2d", pool2d_rewrite)
 
 
 @register_annotate_function("concatenate")
@@ -187,12 +191,16 @@ def concatenate_rewrite(ref_call, new_args, ctx):
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
 
-    lhs_expr, lhs_kind = _get_expr_kind(new_args[0][0])
-    rhs_expr, rhs_kind = _get_expr_kind(new_args[0][1])
+    input_tuple = new_args[0]
+    expr_list = [_get_expr_kind(x)[0] for x in input_tuple]
+    kind_list = [_get_expr_kind(x)[1] for x in input_tuple]
 
-    if lhs_kind is None and rhs_kind is None:
+    if kind_list[0] is None:
+        for k in kind_list:
+            assert k is None
         return None
-
-    assert lhs_kind is not None and rhs_kind is not None
-    expr = _forward_op(ref_call, [_expr.Tuple([lhs_expr, rhs_expr])])
-    return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
+    else:
+        for i, k in enumerate(kind_list):
+            assert k is not None
+        expr = _forward_op(ref_call, [_expr.Tuple(expr_list)])
+        return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)

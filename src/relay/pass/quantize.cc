@@ -158,13 +158,21 @@ inline Expr ForwardOp(const Call& ref_call, const Array<Expr>& args) {
 
 /* calculate `data * s1 / s2`, use shift if possible */
 inline Expr MulAndDiv(Expr data, float s1, float s2) {
+  // here we assume the dtype of data is dtype activation
   const QConfig& cfg = QConfig::Current();
-  float shift_factor = std::log2(s1 / s2);
+  if (s1 == s2) return data;
+
+  float factor = s1 / s2;
+  float shift_factor = std::log2(factor);
   if (static_cast<int>(shift_factor) == shift_factor) {
+    LOG(INFO) << "left shift " << shift_factor;
     return LeftShift(data, MakeConstantScalar(cfg->dtype_activation, static_cast<int>(shift_factor)));
+  } else if (static_cast<int>(factor) == factor) {
+    return Multiply(data, MakeConstantScalar(cfg->dtype_activation, factor));
   } else {
+    LOG(FATAL) << "fall back to float computation";
     data = Cast(data, Float(32));
-    return Multiply(data, MakeConstantScalar(Float(32), s1 / s2));
+    return Multiply(data, MakeConstantScalar(Float(32), factor));
   }
 }
 
@@ -235,7 +243,10 @@ Expr Conv2dRealize(const Call& ref_call,
   const auto* rhs = new_args[1].as<QRealizeIntExprNode>();
   CHECK(rhs);
 
-  Expr ldata = Cast(lhs->data, cfg->dtype_input);
+  Expr ldata = lhs->data;
+  if (lhs->dtype != cfg->dtype_input) {
+    ldata = Cast(ldata, cfg->dtype_input);
+  }
   Expr rdata = Cast(rhs->data, cfg->dtype_weight);
 
   const auto ref_attrs = ref_call->attrs.as<Conv2DAttrs>();
@@ -289,53 +300,56 @@ RELAY_REGISTER_OP("multiply")
 .set_attr<FForwardRewrite>("FQRealizeRewrite", MulRealize);
 
 
+float ChooseDomScale(const std::vector<const QRealizeIntExprNode*>& nptrs) {
+  if (nptrs.size() == 2) {
+    // x = a * s1, y = b * s2
+    // x + y = (a * s1 / s2 + b) * s2, if s1 > s2
+    //       = (a + b * s2 / s1) * s1, if s2 > s1
+    float s1 = GetScalarFromConstant<float>(nptrs[0]->dom_scale);
+    float s2 = GetScalarFromConstant<float>(nptrs[1]->dom_scale);
+    return s1 > s2 ? s2 : s1;
+  } else {
+    const QConfig& cfg = QConfig::Current();
+    float scale = cfg->global_scale;
+    return scale / std::pow(2.0, cfg->nbit_activation - 1);
+  }
+}
+
+
 /* \brief Unify the dom scale of arguments */
 Array<Expr> UnifyDTypeScale(const Array<Expr>& args,
                             DataType* dtype_ptr,
                             Expr* scale_ptr) {
   const QConfig& cfg = QConfig::Current();
 
-  CHECK_EQ(args.size(), 2);
-  CHECK(args[0].as<QRealizeIntExprNode>() && args[1].as<QRealizeIntExprNode>());
-
-  const auto* lhs = args[0].as<QRealizeIntExprNode>();
-  const auto* rhs = args[1].as<QRealizeIntExprNode>();
-  Expr ldata = lhs->data;
-  Expr rdata = rhs->data;
+  std::vector<const QRealizeIntExprNode*> nptrs;
+  Array<Expr> ret;
+  for (auto arg : args) {
+    const auto* nptr = arg.as<QRealizeIntExprNode>();
+    CHECK(nptr);
+    nptrs.push_back(nptr);
+    ret.push_back(nptr->data);
+  }
 
   // unify the data type
   DataType dtype = cfg->dtype_activation;
-  if (lhs->dtype == Float(32)) {
-    ldata = Cast(ldata, dtype);
-  } else {
-    CHECK_EQ(lhs->dtype, dtype);
-  }
-  if (rhs->dtype == Float(32)) {
-    rdata = Cast(rdata, dtype);
-  } else {
-    CHECK_EQ(rhs->dtype, dtype);
+  for (size_t i = 0; i < ret.size(); ++i) {
+    if (nptrs[i]->dtype != dtype) {
+      ret.Set(i, Cast(ret[i], dtype));
+    }
   }
 
   // unify the dom_scale
-  // x = a * s1, y = b * s2
-  // x + y = (a * s1 / s2 + b) * s2, if s1 > s2
-  //       = (a + b * s2 / s1) * s1, if s2 > s1
-  Expr dom_scale;
-  float s1 = GetScalarFromConstant<float>(lhs->dom_scale);
-  float s2 = GetScalarFromConstant<float>(rhs->dom_scale);
-  if (s1 > s2) {
-    dom_scale = rhs->dom_scale;
-    ldata = MulAndDiv(ldata, s1, s2);
-  } else if (s1 < s2) {
-    dom_scale = lhs->dom_scale;
-    rdata = MulAndDiv(rdata, s2, s1);
-  } else {
-    dom_scale = lhs->dom_scale;
+  float s = ChooseDomScale(nptrs);
+  Expr dom_scale = MakeConstantScalar(Float(32), s);
+  for (size_t i = 0; i < ret.size(); ++i) {
+    float cur_s = GetScalarFromConstant<float>(nptrs[i]->dom_scale);
+    LOG(INFO) << "unify data scale from " << cur_s << " to " << s;
+    ret.Set(i, MulAndDiv(ret[i], cur_s, s));
   }
 
   *dtype_ptr = dtype;
   *scale_ptr = dom_scale;
-  Array<Expr> ret{ldata, rdata};
   return ret;
 }
 
@@ -365,20 +379,22 @@ Expr ConcatenateRealize(const Call& ref_call,
   const QConfig& cfg = QConfig::Current();
   CHECK_EQ(new_args.size(), 1);
 
-  LOG(INFO) << "tuple: " << new_args[0];
   const auto* tuple = new_args[0].as<TupleNode>();
   CHECK(tuple);
   const Array<Expr>& arr = tuple->fields;
 
-  if (arr[0].as<QRealizeIntExprNode>() && arr[1].as<QRealizeIntExprNode>()) {
+  if (arr[0].as<QRealizeIntExprNode>()) {
     DataType dtype;
     Expr dom_scale;
     Array<Expr> ret_args = UnifyDTypeScale(arr, &dtype, &dom_scale);
     Expr ret = ForwardOp(ref_call, {TupleNode::make(ret_args)});
     return QRealizeIntExprNode::make(ret, dom_scale, dtype);
+  } else {
+    for (auto arg : new_args) {
+      CHECK(!arg->derived_from<TempExprNode>());
+    }
+    return Expr(nullptr);
   }
-  CHECK(!new_args[0]->derived_from<TempExprNode>() && !new_args[1]->derived_from<TempExprNode>());
-  return Expr(nullptr);
 }
 
 RELAY_REGISTER_OP("concatenate")
@@ -401,24 +417,47 @@ Expr IdentityRealize(const Call& ref_call,
 RELAY_REGISTER_OP("nn.relu")
 .set_attr<FForwardRewrite>("FQRealizeRewrite", IdentityRealize);
 
+RELAY_REGISTER_OP("strided_slice")
+.set_attr<FForwardRewrite>("FQRealizeRewrite", IdentityRealize);
 
-Expr PoolRealize(const Call& ref_call,
-                 const Array<Expr>& new_args,
-                 const NodeRef& ctx) {
+
+Expr MaxPoolRealize(const Call& ref_call,
+                    const Array<Expr>& new_args,
+                    const NodeRef& ctx) {
+  const QConfig& cfg = QConfig::Current();
   CHECK_EQ(new_args.size(), 1);
   if (const auto* n = new_args[0].as<QRealizeIntExprNode>()) {
-    Expr ret = ForwardOp(ref_call, {n->data});
-    return QRealizeIntExprNode::make(ret, n->dom_scale, n->dtype);
+    Expr data = Cast(n->data, cfg->dtype_input);
+    Expr ret = ForwardOp(ref_call, {data});
+    return QRealizeIntExprNode::make(ret, n->dom_scale, cfg->dtype_input);
   }
   CHECK(!new_args[0]->derived_from<TempExprNode>());
   return Expr(nullptr);
 }
 
 RELAY_REGISTER_OP("nn.max_pool2d")
-.set_attr<FForwardRewrite>("FQRealizeRewrite", PoolRealize);
+.set_attr<FForwardRewrite>("FQRealizeRewrite", MaxPoolRealize);
+
+
+Expr AvgPoolRealize(const Call& ref_call,
+                    const Array<Expr>& new_args,
+                    const NodeRef& ctx) {
+  const QConfig& cfg = QConfig::Current();
+  CHECK_EQ(new_args.size(), 1);
+  if (const auto* n = new_args[0].as<QRealizeIntExprNode>()) {
+    Expr data = n->data;
+    if (n->dtype != cfg->dtype_activation) {
+      data = Cast(n->data, cfg->dtype_activation);
+    }
+    Expr ret = ForwardOp(ref_call, {data});
+    return QRealizeIntExprNode::make(ret, n->dom_scale, cfg->dtype_activation);
+  }
+  CHECK(!new_args[0]->derived_from<TempExprNode>());
+  return Expr(nullptr);
+}
 
 RELAY_REGISTER_OP("nn.avg_pool2d")
-.set_attr<FForwardRewrite>("FQRealizeRewrite", PoolRealize);
+.set_attr<FForwardRewrite>("FQRealizeRewrite", AvgPoolRealize);
 
 
 TVM_REGISTER_API("relay._quantize.realize")
