@@ -32,6 +32,7 @@ struct SimulatedQuantizeAttrs : public tvm::AttrsNode<SimulatedQuantizeAttrs> {
     TVM_ATTR_FIELD(kind)
         .describe("kind of field, hint for nbit/dtype configuration.");
     TVM_ATTR_FIELD(sign).set_default(true);
+        .describe("whether to use signed data type.")
     TVM_ATTR_FIELD(rounding).set_default("round")
         .describe("rounding mode. Can be 'floor', 'ceil', 'round'");
   }
@@ -164,8 +165,8 @@ inline Expr MulAndDiv(Expr data, float s1, float s2) {
 
   float factor = s1 / s2;
   float shift_factor = std::log2(factor);
+  CHECK_GT(shift_factor, 0);
   if (static_cast<int>(shift_factor) == shift_factor) {
-    LOG(INFO) << "left shift " << shift_factor;
     return LeftShift(data, MakeConstantScalar(cfg->dtype_activation, static_cast<int>(shift_factor)));
   } else if (static_cast<int>(factor) == factor) {
     return Multiply(data, MakeConstantScalar(cfg->dtype_activation, factor));
@@ -200,10 +201,11 @@ Expr QuantizeRealize(const Call& ref_call,
     float odom_scale_imm = GetScalarFromConstant<float>(dom_scale);
     float shift_nbit = std::log2(odom_scale_imm / idom_scale_imm);
     // int32->int8
+    CHECK_GT(shift_nbit, 0);
     if (static_cast<int>(shift_nbit) == shift_nbit) {
       // use shift
       if (cfg->round_for_shift) {
-        float round_bias = std::pow(2, shift_nbit - 1);
+        float round_bias = 1 << (shift_nbit - 1);
         data = Add(data, MakeConstantScalar(cfg->dtype_activation, static_cast<int>(round_bias)));
       }
       data = RightShift(data, MakeConstantScalar(cfg->dtype_activation, static_cast<int>(shift_nbit)));
@@ -271,6 +273,7 @@ Expr MulRealize(const Call& ref_call,
   const QConfig& cfg = QConfig::Current();
   CHECK_EQ(new_args.size(), 2);
   if (new_args[0].as<QRealizeIntExprNode>() && new_args[1].as<QRealizeIntExprNode>()) {
+    // execute the operation with activation data type.
     const auto* lhs = new_args[0].as<QRealizeIntExprNode>();
     const auto* rhs = new_args[1].as<QRealizeIntExprNode>();
     Expr ldata = lhs->data;

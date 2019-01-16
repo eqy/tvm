@@ -20,6 +20,7 @@ class QAnnotateKind(object):
 
 
 def kind2str(kind):
+    """Convert a `QAnnotateKind` to string"""
     str_map = {
         QAnnotateKind.INPUT: "input",
         QAnnotateKind.WEIGHT: "weight",
@@ -160,6 +161,11 @@ def annotate(graph):
     ---------
     graph: Function
         The original graph
+
+    Returns
+    -------
+    ret: Function
+        The graph after annotation
     """
     _set_conv_counter(0)  # reset counter
     return _quantize.annotate(graph)
@@ -177,6 +183,11 @@ def calibrate(graph, dataset=None):
 
     dataset: list of dict of Var -> NDArray
         The calibration dataset.
+
+    Returns
+    -------
+    ret: Function
+        The graph after calibration
     """
     def power2_scale(arr):
         """calculate weight scale with nearest mode-2 scale"""
@@ -198,7 +209,7 @@ def calibrate(graph, dataset=None):
 
             if kind == QAnnotateKind.WEIGHT:
                 var = e.args[0]
-                assert isinstance(var, _expr.Constant), "{0}".format(var)
+                assert isinstance(var, _expr.Constant), "{0}".format(e.astext(show_meta_data=False))
                 scale = power2_scale(var.data)
             else:
                 scale = cfg.global_scale
@@ -227,12 +238,20 @@ def realize(graph):
     ---------
     graph: Function
         The simulated graph after calibrating.
+
+    Returns
+    -------
+    ret: Function
+        The graph after realization
     """
     return _quantize.realize(graph)
 
 
 def quantize(graph, params=None, dataset=None):
-    """ The quantization procedure.
+    """ The quantization procedure. Before running the three main
+    procedure of quantization, "annotate", "calibrate" and "realize"
+    , we need to do "SimplifyInference", "FoldScaleAxis", "FoldConstant"
+    first for optimizing.
 
     Parameters
     ---------
@@ -245,12 +264,17 @@ def quantize(graph, params=None, dataset=None):
 
     dataset: list of dict of Var -> NDArray
         The calibration dataset.
+
+    Returns
+    -------
+    ret: Function
+        The graph after quantization
     """
-    with _build.build_config(opt_level=3):
-        graph = _build.optimize(graph, params)
+    opt_passes = ["SimplifyInference", "FoldScaleAxis", "FoldConstant"]
+    with _build.build_config(add_pass=opt_passes):
+        graph = _build.optimize(graph)
+
     graph = annotate(graph)
     graph = calibrate(graph, dataset)
     graph = realize(graph)
-    with _build.build_config(opt_level=3):
-        graph = _build.optimize(graph)
     return graph

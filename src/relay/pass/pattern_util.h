@@ -19,6 +19,10 @@
 namespace tvm {
 namespace relay {
 
+/*!
+ * \brief Dispatch DataType to the C++ data type
+ *  during runtime.
+ */
 #define TVM_DTYPE_DISPATCH(type, DType, ...)            \
   if (type == Float(64)) {                              \
     typedef double DType;                               \
@@ -180,7 +184,6 @@ inline int64_t GetConv2DSuperChannelsDim(const CallNode* call) {
  */
 template<typename T>
 inline Constant MakeConstantScalar(DataType dtype, T value) {
-  // CHECK_EQ(sizeof(T) * 8, dtype.bits()) << "data type mismatch";
   runtime::NDArray arr = runtime::NDArray::Empty({}, Type2TVMType(dtype), {kDLCPU, 0});
   TVM_DTYPE_DISPATCH(dtype, DType, {
     *static_cast<DType*>(arr->data) = value;
