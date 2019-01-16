@@ -1,3 +1,5 @@
+#pylint: disable=unused-argument
+"""Internal module for registering attribute for annotation."""
 from __future__ import absolute_import
 
 from . import _quantize
@@ -36,8 +38,7 @@ def _get_expr_kind(anno):
     """Get the expression and QAnnotateKind from QAnnotateExpr or Expr"""
     if isinstance(anno, QAnnotateExpr):
         return anno.expr, anno.kind
-    else:
-        return anno, None
+    return anno, None
 
 
 def register_annotate_function(op_name, frewrite=None, level=10):
@@ -92,6 +93,7 @@ def attach_simulated_quantize(data, kind, sign=True, rounding="round"):
 
 @register_annotate_function("nn.conv2d")
 def conv2d_rewrite(ref_call, new_args, ctx):
+    """Rewrite function for conv2d"""
     cnt = _conv_counter()
     if cnt < current_qconfig().skip_k_conv:
         _set_conv_counter(cnt + 1)
@@ -113,6 +115,7 @@ def conv2d_rewrite(ref_call, new_args, ctx):
 
 @register_annotate_function("multiply")
 def multiply_rewrite(ref_call, new_args, ctx):
+    """Rewrite function for multiply"""
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
 
@@ -121,17 +124,17 @@ def multiply_rewrite(ref_call, new_args, ctx):
 
     if lhs_kind is None and rhs_kind is None:
         return None
-    elif lhs_kind == QAnnotateKind.ACTIVATION and rhs_kind is None:
+    if lhs_kind == QAnnotateKind.ACTIVATION and rhs_kind is None:
         lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT)
         rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
         expr = _forward_op(ref_call, [lhs_expr, rhs_expr])
         return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
-    else:
-        raise ValueError
+    raise ValueError
 
 
 @register_annotate_function("add")
 def add_rewrite(ref_call, new_args, ctx):
+    """Rewrite function for add"""
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
 
@@ -140,9 +143,9 @@ def add_rewrite(ref_call, new_args, ctx):
 
     if lhs_kind is None and rhs_kind is None:
         return None
-    elif lhs_kind is None and rhs_kind is not None:
+    if lhs_kind is None and rhs_kind is not None:
         lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT)
-    elif lhs_kind is not None and rhs_kind is None:
+    if lhs_kind is not None and rhs_kind is None:
         if isinstance(rhs_expr, _expr.Constant):
             rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
         else:
@@ -153,15 +156,16 @@ def add_rewrite(ref_call, new_args, ctx):
 
 
 def identity_rewrite(ref_call, new_args, ctx):
+    """Simply forward the original operation"""
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
 
     x_expr, x_kind = _get_expr_kind(new_args[0])
     if x_kind is None:
         return None
-    else:
-        ret_expr = _forward_op(ref_call, [x_expr])
-        return QAnnotateExpr(ret_expr, x_kind)
+
+    ret_expr = _forward_op(ref_call, [x_expr])
+    return QAnnotateExpr(ret_expr, x_kind)
 
 
 register_annotate_function("nn.relu", identity_rewrite)
@@ -170,17 +174,17 @@ register_annotate_function("nn.avg_pool2d", identity_rewrite)
 
 
 def pool2d_rewrite(ref_call, new_args, ctx):
+    """Rewrite function for max pool2d"""
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
-
     expr, x_kind = _get_expr_kind(new_args[0])
+
     if x_kind is None:
         return None
-    else:
-        if x_kind == QAnnotateKind.ACTIVATION:
-            expr = attach_simulated_quantize(expr, QAnnotateKind.INPUT)
-        expr = _forward_op(ref_call, [expr])
-        return QAnnotateExpr(expr, QAnnotateKind.INPUT)
+    if x_kind == QAnnotateKind.ACTIVATION:
+        expr = attach_simulated_quantize(expr, QAnnotateKind.INPUT)
+    expr = _forward_op(ref_call, [expr])
+    return QAnnotateExpr(expr, QAnnotateKind.INPUT)
 
 
 register_annotate_function("nn.max_pool2d", pool2d_rewrite)
@@ -188,6 +192,7 @@ register_annotate_function("nn.max_pool2d", pool2d_rewrite)
 
 @register_annotate_function("concatenate")
 def concatenate_rewrite(ref_call, new_args, ctx):
+    """Rewrite function for concatenate"""
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
 
@@ -199,8 +204,7 @@ def concatenate_rewrite(ref_call, new_args, ctx):
         for k in kind_list:
             assert k is None
         return None
-    else:
-        for i, k in enumerate(kind_list):
-            assert k is not None
-        expr = _forward_op(ref_call, [_expr.Tuple(expr_list)])
-        return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
+    for k in kind_list:
+        assert k is not None
+    expr = _forward_op(ref_call, [_expr.Tuple(expr_list)])
+    return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)

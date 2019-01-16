@@ -6,16 +6,17 @@
  * \brief transform a graph to a low-bit graph
  *   for compression and acceleration.
  */
-#include <cmath>
-#include <string>
-#include <stack>
 #include <dmlc/thread_local.h>
 #include <tvm/base.h>
 #include <tvm/relay/pass.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/op_attr_types.h>
-#include "./quantize.h"
-#include "./pattern_util.h"
+#include <cmath>
+#include <string>
+#include <vector>
+#include <stack>
+#include "pattern_util.h"
+#include "quantize.h"
 
 
 namespace tvm {
@@ -31,8 +32,8 @@ struct SimulatedQuantizeAttrs : public tvm::AttrsNode<SimulatedQuantizeAttrs> {
   TVM_DECLARE_ATTRS(SimulatedQuantizeAttrs, "relay.attrs.SimulatedQuantizeAttrs") {
     TVM_ATTR_FIELD(kind)
         .describe("kind of field, hint for nbit/dtype configuration.");
-    TVM_ATTR_FIELD(sign).set_default(true);
-        .describe("whether to use signed data type.")
+    TVM_ATTR_FIELD(sign).set_default(true)
+        .describe("whether to use signed data type.");
     TVM_ATTR_FIELD(rounding).set_default("round")
         .describe("rounding mode. Can be 'floor', 'ceil', 'round'");
   }
@@ -167,7 +168,8 @@ inline Expr MulAndDiv(Expr data, float s1, float s2) {
   float shift_factor = std::log2(factor);
   CHECK_GT(shift_factor, 0);
   if (static_cast<int>(shift_factor) == shift_factor) {
-    return LeftShift(data, MakeConstantScalar(cfg->dtype_activation, static_cast<int>(shift_factor)));
+    return LeftShift(data, MakeConstantScalar(cfg->dtype_activation,
+                                              static_cast<int>(shift_factor)));
   } else if (static_cast<int>(factor) == factor) {
     return Multiply(data, MakeConstantScalar(cfg->dtype_activation, factor));
   } else {
@@ -205,10 +207,11 @@ Expr QuantizeRealize(const Call& ref_call,
     if (static_cast<int>(shift_nbit) == shift_nbit) {
       // use shift
       if (cfg->round_for_shift) {
-        float round_bias = 1 << (shift_nbit - 1);
+        float round_bias = std::pow(2.0, shift_nbit - 1);
         data = Add(data, MakeConstantScalar(cfg->dtype_activation, static_cast<int>(round_bias)));
       }
-      data = RightShift(data, MakeConstantScalar(cfg->dtype_activation, static_cast<int>(shift_nbit)));
+      data = RightShift(data, MakeConstantScalar(cfg->dtype_activation,
+                                                 static_cast<int>(shift_nbit)));
       data = Clip(data, clip_min_imm, clip_max_imm);
       return QRealizeIntExprNode::make(data, dom_scale, n->dtype);
     } else {

@@ -1,5 +1,6 @@
+#pylint: disable=unused-argument
+"""Automatic quantization toolkit."""
 from __future__ import absolute_import
-import math
 import numpy as np
 
 from . import _quantize
@@ -198,18 +199,18 @@ def calibrate(graph, dataset=None):
     const_params = {}
     quantize_op = _op.get("simulated_quantize")
 
-    def visit_func(e):
-        if isinstance(e, _expr.Call) and e.op == quantize_op:
-            ndata, ndom_scale, nclip_min, nclip_max = e.args
-            attrs = e.attrs
+    def visit_func(expr):
+        if isinstance(expr, _expr.Call) and expr.op == quantize_op:
+            _, ndom_scale, nclip_min, nclip_max = expr.args
+            attrs = expr.attrs
             kind = attrs.kind
             nbit = cfg.get_nbit_by_kind(kind)
 
             valid_bit = nbit - attrs.sign
 
             if kind == QAnnotateKind.WEIGHT:
-                var = e.args[0]
-                assert isinstance(var, _expr.Constant), "{0}".format(e.astext(show_meta_data=False))
+                var = expr.args[0]
+                assert isinstance(var, _expr.Constant)
                 scale = power2_scale(var.data)
             else:
                 scale = cfg.global_scale
@@ -221,7 +222,6 @@ def calibrate(graph, dataset=None):
             const_params[ndom_scale] = _make_const(scale / valid_range)
             const_params[nclip_min] = _make_const(- (valid_range - 1))
             const_params[nclip_max] = _make_const((valid_range - 1))
-        return
 
     _ir_pass.post_order_visit(graph, visit_func)
     return _expr.bind(graph, const_params)
@@ -270,9 +270,12 @@ def quantize(graph, params=None, dataset=None):
     ret: Function
         The graph after quantization
     """
-    opt_passes = ["SimplifyInference", "FoldScaleAxis", "FoldConstant"]
+    opt_passes = ["SimplifyInference",
+                  "FoldScaleAxis",
+                  "FoldConstant",
+                  "CanonicalizeOps"]
     with _build.build_config(add_pass=opt_passes):
-        graph = _build.optimize(graph)
+        graph = _build.optimize(graph, params)
 
     graph = annotate(graph)
     graph = calibrate(graph, dataset)

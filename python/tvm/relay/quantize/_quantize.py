@@ -1,4 +1,5 @@
-"""FFI exposing the Relay type inference and checking."""
+#pylint: disable=unused-argument
+"""Internal module for quantization."""
 from __future__ import absolute_import
 import topi
 from tvm._ffi.function import _init_api
@@ -6,7 +7,7 @@ from ..op import op as _reg
 
 
 @_reg.register_compute("simulated_quantize")
-def simulated_quantize_compute(attrs, inputs, output_type, target):
+def simulated_quantize_compute(attrs, inputs, out_type, target):
     """Compiler for simulated_quantize."""
     assert len(inputs) == 4
     assert attrs.sign

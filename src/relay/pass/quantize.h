@@ -7,10 +7,10 @@
 #ifndef TVM_RELAY_PASS_QUANTIZE_H_
 #define TVM_RELAY_PASS_QUANTIZE_H_
 
-#include <string>
 #include <tvm/relay/op.h>
 #include <tvm/relay/expr.h>
-#include "./pattern_util.h"
+#include <string>
+#include "pattern_util.h"
 
 namespace tvm {
 namespace relay {
