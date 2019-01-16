@@ -2,6 +2,7 @@ import tvm
 from tvm import relay
 from tvm.relay.parser import enabled
 from tvm.relay.ir_pass import alpha_equal
+from nose import SkipTest
 from nose.tools import nottest, raises
 from numpy import isclose
 from typing import Union
@@ -67,7 +68,7 @@ def if_parser_enabled(func):
     @wraps(func)
     def wrapper():
         if not enabled():
-            return
+            raise SkipTest("ANTLR is not installed!")
         func()
     return wrapper
 
@@ -281,6 +282,16 @@ def test_defn():
     assert isinstance(id_defn, relay.Module)
 
 @if_parser_enabled
+def test_recursive_call():
+    id_defn = relay.fromtext(
+        """
+        def @id(%x: int32) -> int32 {
+            @id(%x)
+        }
+        """)
+    assert isinstance(id_defn, relay.Module)
+
+@if_parser_enabled
 def test_ifelse():
     assert alpha_equal(
         relay.fromtext(
@@ -315,6 +326,22 @@ def test_ifelse_scope():
 
 @if_parser_enabled
 def test_call():
+    # select right function to call: simple ident case
+    id_func = relay.Var("id")
+    assert alpha_equal(
+        relay.fromtext(
+        """
+        let %id = fn (%x) { %x };
+        10 * %id(10)
+        """
+        ),
+        relay.Let(
+            id_func,
+            relay.Function([X], X, None, []),
+            relay.multiply(relay.const(10), relay.Call(id_func, [relay.const(10)]))
+        )
+    )
+
     # 0 args
     constant = relay.Var("constant")
     assert alpha_equal(

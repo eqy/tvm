@@ -12,6 +12,7 @@
 #include <tvm/relay/expr.h>
 #include <tvm/relay/attrs/nn.h>
 #include <tvm/relay/attrs/transform.h>
+#include <tvm/relay/attrs/nn.h>
 #include <string>
 #include "../op/layout.h"
 
@@ -211,6 +212,23 @@ inline Expr Cast(Expr x, DataType dtype) {
   return CallNode::make(op, {x}, Attrs(attrs), {});
 }
 
+inline Expr GetField(Expr t, size_t i) {
+  return TupleGetItemNode::make(t, i);
+}
+
+inline Expr Pair(Expr l, Expr r) {
+  return TupleNode::make({l, r});
+}
+
+inline Expr Exp(Expr e) {
+  static const Op& op = Op::Get("exp");
+  return CallNode::make(op, {e});
+}
+
+inline Expr Log(Expr e) {
+  static const Op& op = Op::Get("log");
+  return CallNode::make(op, {e});
+}
 
 inline Expr Negative(Expr x) {
   static const Op& op = Op::Get("negative");
@@ -268,6 +286,15 @@ inline Expr Divide(Expr lhs, Expr rhs) {
   return CallNode::make(op, {lhs, rhs}, Attrs(), {});
 }
 
+inline Expr ZeroLike(Expr e) {
+  static const Op& op = Op::Get("zeros_like");
+  return CallNode::make(op, {e});
+}
+
+inline Expr OneLike(Expr e) {
+  static const Op& op = Op::Get("ones_like");
+  return CallNode::make(op, {e});
+}
 
 inline Expr Power(Expr lhs, Expr rhs) {
   static const Op& op = Op::Get("power");
