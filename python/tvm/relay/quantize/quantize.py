@@ -200,6 +200,7 @@ def calibrate(graph, dataset=None):
     quantize_op = _op.get("simulated_quantize")
 
     def visit_func(expr):
+        """Internal visit function"""
         if isinstance(expr, _expr.Call) and expr.op == quantize_op:
             _, ndom_scale, nclip_min, nclip_max = expr.args
             attrs = expr.attrs
