@@ -93,7 +93,9 @@ def attach_simulated_quantize(data, kind, sign=True, rounding="round"):
 
 @register_annotate_function("nn.conv2d")
 def conv2d_rewrite(ref_call, new_args, ctx):
-    """Rewrite function for conv2d"""
+    """Rewrite function for conv2d. Lhs of conv will be quantized to
+    input field, and rhs of conv will be quantized to weight field.
+    Output would be in activation field"""
     cnt = _conv_counter()
     if cnt < current_qconfig().skip_k_conv:
         _set_conv_counter(cnt + 1)
@@ -115,7 +117,7 @@ def conv2d_rewrite(ref_call, new_args, ctx):
 
 @register_annotate_function("multiply")
 def multiply_rewrite(ref_call, new_args, ctx):
-    """Rewrite function for multiply"""
+    """Rewrite function for multiply."""
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
 
@@ -125,7 +127,9 @@ def multiply_rewrite(ref_call, new_args, ctx):
     if lhs_kind is None and rhs_kind is None:
         return None
     if lhs_kind == QAnnotateKind.ACTIVATION and rhs_kind is None:
+        # quantize lhs to INPUT field
         lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT)
+        # quantize rhs to WEIGHT field
         rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
         expr = _forward_op(ref_call, [lhs_expr, rhs_expr])
         return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
@@ -134,7 +138,7 @@ def multiply_rewrite(ref_call, new_args, ctx):
 
 @register_annotate_function("add")
 def add_rewrite(ref_call, new_args, ctx):
-    """Rewrite function for add"""
+    """Rewrite function for add."""
     if _conv_counter() <= current_qconfig().skip_k_conv:
         return None
 
@@ -144,11 +148,14 @@ def add_rewrite(ref_call, new_args, ctx):
     if lhs_kind is None and rhs_kind is None:
         return None
     if lhs_kind is None and rhs_kind is not None:
+        # quantize lhs to INPUT field if it is normal expression
         lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT)
     if lhs_kind is not None and rhs_kind is None:
         if isinstance(rhs_expr, _expr.Constant):
+            # quantize rhs to WEIGHT field if it is Constant
             rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
         else:
+            # quantize rhs to INPUT field if it is not Constant
             rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.INPUT)
 
     expr = _forward_op(ref_call, [lhs_expr, rhs_expr])
@@ -200,6 +207,8 @@ def concatenate_rewrite(ref_call, new_args, ctx):
     expr_list = [_get_expr_kind(x)[0] for x in input_tuple]
     kind_list = [_get_expr_kind(x)[1] for x in input_tuple]
 
+    # make sure the inputs of concatenate are all normal
+    # expression or annotate expression
     if kind_list[0] is None:
         for k in kind_list:
             assert k is None
