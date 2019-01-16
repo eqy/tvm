@@ -362,7 +362,6 @@ Array<Expr> UnifyDTypeScale(const Array<Expr>& args,
 Expr AddRealize(const Call& ref_call,
                 const Array<Expr>& new_args,
                 const NodeRef& ctx) {
-  const QConfig& cfg = QConfig::Current();
   CHECK_EQ(new_args.size(), 2);
   if (new_args[0].as<QRealizeIntExprNode>() && new_args[1].as<QRealizeIntExprNode>()) {
     DataType dtype;
@@ -382,7 +381,6 @@ RELAY_REGISTER_OP("add")
 Expr ConcatenateRealize(const Call& ref_call,
                         const Array<Expr>& new_args,
                         const NodeRef& ctx) {
-  const QConfig& cfg = QConfig::Current();
   CHECK_EQ(new_args.size(), 1);
 
   const auto* tuple = new_args[0].as<TupleNode>();
