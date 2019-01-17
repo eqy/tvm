@@ -10,9 +10,8 @@ def test_simulated_quantize():
     out = relay.ir_pass.infer_type(out)
     assert out.checked_type == out.args[0].checked_type
     assert out.args[1].checked_type == relay.ty.TensorType(tuple(), "float32")
-    assert out.args[2].checked_type == relay.ty.TensorType(tuple(), "int32")
+    assert out.args[2].checked_type == relay.ty.TensorType(tuple(), "float32")
     assert out.args[3].checked_type == relay.ty.TensorType(tuple(), "float32")
-    assert out.args[4].checked_type == relay.ty.TensorType(tuple(), "float32")
 
 
 def test_quantize_pass():

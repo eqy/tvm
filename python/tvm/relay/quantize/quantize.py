@@ -276,9 +276,10 @@ def quantize(graph, params=None, dataset=None):
                   "FoldConstant",
                   "CanonicalizeOps"]
     with _build.build_config(add_pass=opt_passes):
-        graph = _build.optimize(graph, params)
+        graph = _build.optimize(graph, params=params)
 
     graph = annotate(graph)
     graph = calibrate(graph, dataset)
     graph = realize(graph)
+    graph = _ir_pass.fold_constant(graph)
     return graph
