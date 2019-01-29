@@ -28,6 +28,7 @@ struct SimulatedQuantizeAttrs : public tvm::AttrsNode<SimulatedQuantizeAttrs> {
   int kind;
   bool sign;
   std::string rounding;
+  int cid;
 
   TVM_DECLARE_ATTRS(SimulatedQuantizeAttrs, "relay.attrs.SimulatedQuantizeAttrs") {
     TVM_ATTR_FIELD(kind)
@@ -36,6 +37,9 @@ struct SimulatedQuantizeAttrs : public tvm::AttrsNode<SimulatedQuantizeAttrs> {
         .describe("whether to use signed data type.");
     TVM_ATTR_FIELD(rounding).set_default("round")
         .describe("rounding mode. Can be 'floor', 'ceil', 'round'");
+    TVM_ATTR_FIELD(cid).set_default(-1)
+        .describe("id for the associated convolution. Can be used for mixing\
+                   different precisions in the network.");
   }
 };
 
@@ -72,14 +76,16 @@ RELAY_REGISTER_OP("simulated_quantize")
 .add_type_rel("SimulatedQuantize", SimulatedQuantizeRel);
 
 TVM_REGISTER_API("relay._quantize.simulated_quantize")
-.set_body_typed<Expr(Expr, Expr, Expr, Expr, int, bool, std::string)>(
+.set_body_typed<Expr(Expr, Expr, Expr, Expr, int, bool, std::string, int)>(
   [](Expr data, Expr dom_scale, Expr clip_min, Expr clip_max,
-     int kind, bool sign, std::string rounding) {
+     int kind, bool sign, std::string rounding, int cid) {
     auto attrs = make_node<SimulatedQuantizeAttrs>();
     attrs->kind = kind;
     attrs->sign = sign;
     attrs->rounding = rounding;
+    attrs->cid = cid;
     static const Op& op = Op::Get("simulated_quantize");
+    //LOG(INFO) << "make simulated_quantize with clip " << clip_min << " " << clip_max;
     return CallNode::make(op, {data, dom_scale, clip_min, clip_max}, Attrs(attrs), {});
   });
 
@@ -350,7 +356,7 @@ Array<Expr> UnifyDTypeScale(const Array<Expr>& args,
   Expr dom_scale = MakeConstantScalar(Float(32), s);
   for (size_t i = 0; i < ret.size(); ++i) {
     float cur_s = GetScalarFromConstant<float>(nptrs[i]->dom_scale);
-    LOG(INFO) << "unify data scale from " << cur_s << " to " << s;
+    //LOG(INFO) << "unify data scale from " << cur_s << " to " << s;
     ret.Set(i, MulAndDiv(ret[i], cur_s, s));
   }
 

@@ -14,7 +14,10 @@ def simulated_quantize_compute(attrs, inputs, out_type, target):
     assert attrs.rounding == "round"
 
     data, scale, clip_min, clip_max = inputs
-
+    #print("simulated_quantize_compute cliperino")
+    #print(clip_min)
+    #print(clip_max)
+    #print("???????")
     # simulate rounding error
     scaled_data = topi.divide(data, scale)
     clipped_data = topi.maximum(topi.minimum(scaled_data, clip_max), clip_min)

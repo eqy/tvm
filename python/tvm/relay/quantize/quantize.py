@@ -172,7 +172,7 @@ def annotate(graph):
     return _quantize.annotate(graph)
 
 
-def calibrate(graph, dataset=None):
+def calibrate(graph, dataset=None, custom_mix_config=None):
     """The calibrate procedure will try to calculate the content of
     dom_scale, nbit, clip_min, clip_max for every `simulated_quantize`
     operator.
@@ -203,11 +203,30 @@ def calibrate(graph, dataset=None):
         """Internal visit function"""
         if isinstance(expr, _expr.Call) and expr.op == quantize_op:
             _, ndom_scale, nclip_min, nclip_max = expr.args
+
             attrs = expr.attrs
             kind = attrs.kind
             nbit = cfg.get_nbit_by_kind(kind)
-
-            valid_bit = nbit - attrs.sign
+            cid = attrs.cid
+            assert(attrs.cid >= 0)
+        
+            custom_nbit = None
+            if custom_mix_config is not None:
+                #pass
+                idx = kind - 1
+                assert idx <= 2
+                assert cid < len(custom_mix_config[idx])
+                custom_nbit = int(custom_mix_config[idx][cid])
+                #assert nbit == custom_nbit
+                #print("orig bit:", nbit)
+                #print("custom bit:", custom_nbit)
+                #nbit = custom_nbit
+                
+            if custom_nbit is None:
+                valid_bit = nbit - attrs.sign
+            else:
+                #assert(nbit == custom_nbit)
+                valid_bit = custom_nbit - attrs.sign 
 
             if kind == QAnnotateKind.WEIGHT:
                 var = expr.args[0]
@@ -220,6 +239,7 @@ def calibrate(graph, dataset=None):
                 return _expr.const(val, 'float32')
 
             valid_range = 2**valid_bit
+            #raise Exception
             const_params[ndom_scale] = _make_const(scale / valid_range)
             const_params[nclip_min] = _make_const(- (valid_range - 1))
             const_params[nclip_max] = _make_const((valid_range - 1))

@@ -73,7 +73,7 @@ def register_annotate_function(op_name, frewrite=None, level=10):
 
 
 @register_func("relay.quantize.attach_simulated_quantize")
-def attach_simulated_quantize(data, kind, sign=True, rounding="round"):
+def attach_simulated_quantize(data, kind, cid=-999, sign=True, rounding="round"):
     """Attach a simulated quantize operation after input data expr.
 
     Parameters
@@ -87,8 +87,11 @@ def attach_simulated_quantize(data, kind, sign=True, rounding="round"):
     dom_scale = _expr.var("dom_scale")
     clip_min = _expr.var("clip_min")
     clip_max = _expr.var("clip_max")
+    #print("dom_scale", dom_scale)
+    #print("kind:", kind)
+    #print("attaching with cid:", cid)
     return _quantize.simulated_quantize(
-        data, dom_scale, clip_min, clip_max, kind, sign, rounding)
+        data, dom_scale, clip_min, clip_max, kind, sign, rounding, cid)
 
 
 @register_annotate_function("nn.conv2d")
@@ -97,6 +100,7 @@ def conv2d_rewrite(ref_call, new_args, ctx):
     input field, and rhs of conv will be quantized to weight field.
     Output would be in activation field"""
     cnt = _conv_counter()
+    #print("CONV COUNTER", cnt)
     if cnt < current_qconfig().skip_k_conv:
         _set_conv_counter(cnt + 1)
         return None
@@ -104,12 +108,12 @@ def conv2d_rewrite(ref_call, new_args, ctx):
 
     lhs_expr, lhs_kind = _get_expr_kind(new_args[0])
     rhs_expr, rhs_kind = _get_expr_kind(new_args[1])
-
+    #print("conv2d_rewrite")
     if lhs_kind is None or lhs_kind != QAnnotateKind.INPUT:
-        lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT)
+        lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT, cnt)
 
     assert rhs_kind is None
-    rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
+    rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT, cnt)
 
     expr = _forward_op(ref_call, [lhs_expr, rhs_expr])
     return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
@@ -118,7 +122,8 @@ def conv2d_rewrite(ref_call, new_args, ctx):
 @register_annotate_function("multiply")
 def multiply_rewrite(ref_call, new_args, ctx):
     """Rewrite function for multiply."""
-    if _conv_counter() <= current_qconfig().skip_k_conv:
+    cnt = _conv_counter()
+    if cnt <= current_qconfig().skip_k_conv:
         return None
 
     lhs_expr, lhs_kind = _get_expr_kind(new_args[0])
@@ -128,9 +133,9 @@ def multiply_rewrite(ref_call, new_args, ctx):
         return None
     if lhs_kind == QAnnotateKind.ACTIVATION and rhs_kind is None:
         # quantize lhs to INPUT field
-        lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT)
+        lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT, cnt)
         # quantize rhs to WEIGHT field
-        rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
+        rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT, cnt)
         expr = _forward_op(ref_call, [lhs_expr, rhs_expr])
         return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
     raise ValueError
@@ -139,7 +144,8 @@ def multiply_rewrite(ref_call, new_args, ctx):
 @register_annotate_function("add")
 def add_rewrite(ref_call, new_args, ctx):
     """Rewrite function for add."""
-    if _conv_counter() <= current_qconfig().skip_k_conv:
+    cnt = _conv_counter()
+    if cnt <= current_qconfig().skip_k_conv:
         return None
 
     lhs_expr, lhs_kind = _get_expr_kind(new_args[0])
@@ -149,14 +155,14 @@ def add_rewrite(ref_call, new_args, ctx):
         return None
     if lhs_kind is None and rhs_kind is not None:
         # quantize lhs to INPUT field if it is normal expression
-        lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT)
+        lhs_expr = attach_simulated_quantize(lhs_expr, QAnnotateKind.INPUT, cnt)
     if lhs_kind is not None and rhs_kind is None:
         if isinstance(rhs_expr, _expr.Constant):
             # quantize rhs to WEIGHT field if it is Constant
-            rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT)
+            rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.WEIGHT, cnt)
         else:
             # quantize rhs to INPUT field if it is not Constant
-            rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.INPUT)
+            rhs_expr = attach_simulated_quantize(rhs_expr, QAnnotateKind.INPUT, cnt)
 
     expr = _forward_op(ref_call, [lhs_expr, rhs_expr])
     return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
@@ -182,14 +188,15 @@ register_annotate_function("nn.avg_pool2d", identity_rewrite)
 
 def pool2d_rewrite(ref_call, new_args, ctx):
     """Rewrite function for max pool2d"""
-    if _conv_counter() <= current_qconfig().skip_k_conv:
+    cnt = _conv_counter()
+    if cnt <= current_qconfig().skip_k_conv:
         return None
     expr, x_kind = _get_expr_kind(new_args[0])
 
     if x_kind is None:
         return None
     if x_kind == QAnnotateKind.ACTIVATION:
-        expr = attach_simulated_quantize(expr, QAnnotateKind.INPUT)
+        expr = attach_simulated_quantize(expr, QAnnotateKind.INPUT, cnt)
     expr = _forward_op(ref_call, [expr])
     return QAnnotateExpr(expr, QAnnotateKind.INPUT)
 
