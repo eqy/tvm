@@ -6,8 +6,8 @@
 #ifndef TVM_RELAY_PASS_H_
 #define TVM_RELAY_PASS_H_
 
-#include <tvm/relay/module.h>
 #include <tvm/relay/expr.h>
+#include <tvm/relay/module.h>
 #include <tvm/relay/op_attr_types.h>
 #include <string>
 
@@ -108,6 +108,17 @@ bool AlphaEqual(const Type& t1, const Type& t2);
  */
 bool WellFormed(const Expr& expr);
 
+/*! \brief Get all bound variables from expression expr.
+ *
+ * Bound variables are all variables that are declared in the expr.
+ * They only have meaning inside that expr, and can only be used in it.
+ *
+ * \param expr the expression.
+ *
+ * \return List of bound vars, in the PostDFS order in the expression.
+ */
+tvm::Array<Var> BoundVars(const Expr& expr);
+
 /*! \brief Get free type parameters from expression expr.
  *
  * Free variables are variables that are not bound by a
@@ -119,6 +130,14 @@ bool WellFormed(const Expr& expr);
  */
 tvm::Array<Var> FreeVars(const Expr& expr);
 
+/*! \brief Get all variables from expression expr.
+ *
+ * \param expr the expression.
+ *
+ * \return List of all vars, in the PostDFS order in the expression.
+ */
+tvm::Array<Var> AllVars(const Expr& expr);
+
 /*! \brief Get free TypeVars from expression expr.
  *
  * Free type parameters are type parameters that are not bound by a function
@@ -129,6 +148,55 @@ tvm::Array<Var> FreeVars(const Expr& expr);
  * \return List of free vars, in the PostDFS order visited by expr.
  */
 tvm::Array<TypeVar> FreeTypeVars(const Expr& expr);
+
+/*! \brief Get free TypeVars from type t.
+ *
+ * Free type parameters are type parameters that are not bound by a function
+ * type in the context.
+ *
+ * \param t the type.
+ *
+ * \return List of free type vars, in the PostDFS order visited by type.
+ */
+tvm::Array<TypeVar> FreeTypeVars(const Type& t);
+
+/*! \brief Get all bound type variables from expression expr.
+ *
+ * Bound variables are all type variables that are declared in the expr.
+ * They only have meaning inside that expr, and can only be used in it.
+ *
+ * \param expr the expression.
+ *
+ * \return List of bound type vars, in the PostDFS order in the expression.
+ */
+tvm::Array<TypeVar> BoundTypeVars(const Expr& expr);
+
+/*! \brief Get all bound type variables from type t.
+ *
+ * Bound variables are all type variables that are declared in the type.
+ * They only have meaning inside that type, and can only be used in it.
+ *
+ * \param t the type
+ *
+ * \return List of bound type vars, in the PostDFS order visited by type.
+ */
+tvm::Array<TypeVar> BoundTypeVars(const Type& t);
+
+/*! \brief Get all type variables in expression expr.
+ *
+ * \param expr the expression.
+ *
+ * \return List of type vars, in the PostDFS order in the expression.
+ */
+tvm::Array<TypeVar> AllTypeVars(const Expr& expr);
+
+/*! \brief Get all type variables in type t.
+ *
+ * \param t the type.
+ *
+ * \return List of type vars, in the PostDFS order visited by type.
+ */
+tvm::Array<TypeVar> AllTypeVars(const Type& t);
 
 /*! \brief Remove expressions which does not effect the program result.
  *
@@ -227,6 +295,26 @@ struct StructuralHash {
    */
   size_t operator()(const Expr& expr) const;
 };
+
+/*! \brief turn a dataflow graph into Administrative Normal Form, or A-Normal Form (ANF).
+ *
+ * It will turn an expression that is in a graph form (with sharing implicit),
+ * to an expression with explicit sharing (A-Normal Form).
+ *
+ * The scope of the root expression is the global scope.
+
+ * The scope of any non root expression is the least common ancestor of all it's scope.
+ *
+ * Values are ordered by post-DFS order in each scope.
+ *
+ * \param e the expression to observably share
+ *
+ * \param mod The module used for referencing global functions, can be
+ * None.
+ *
+ * \return expression in A-Normal Form
+ */
+Expr ToANF(const Expr& e, const Module& mod);
 
 }  // namespace relay
 }  // namespace tvm
