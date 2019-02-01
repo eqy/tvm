@@ -2,6 +2,7 @@ import numpy as np
 from evaluate import evaluate_standalone
 from model_exp import configs_to_feats0
 import xgboost as xgb
+from multiprocessing import Process, Queue
 
 class Proposer(object):
     def __init__(self):
@@ -47,6 +48,10 @@ class Tuner(object):
     def tune(batch_size=64):
         raise NotImplementedError
 
+def process_wrapper(queue, configs):
+    for config in configs:
+        queue.put(evaluate_standalone(config))
+
 class XGBTuner(Tuner):
     def __init__(self, proposer, evaluator):
         super().__init__()
@@ -76,19 +81,42 @@ class XGBTuner(Tuner):
         self.bst = xgb.train(params, dtrain0, 1000, evals=watchlist, early_stopping_rounds=10)
         
 
-    def tune(self, batch_size=64):
+    def tune(self, batch_size=64, mode='test'):
+        if mode == 'test':
+            queue = Queue()
+            proposed_configs = list()
+            for i in range(0, batch_size):
+                proposed_configs.append(self.proposer.propose())
+
+            p = Process(target=self.evaluator, args=(queue,
+                                                     proposed_configs))
+            p.start()
+            p.join()
+            for i in range(0, batch_size):
+                result = queue.get()
+                print("test result:", result) 
+            #self.evaluator(self.proposer.propose())
+            return
+            
         if len(self.configs) <= 0:
             print("first batch, collecting measurements...")
             cur_batch = list()
             cur_batch_acc = list()
             for i in range(0, batch_size):
                 cur_batch.append(self.proposer.propose())
-                # MEASUREMENT
-                cur_batch_acc.append(self.evaluator(cur_batch[i]))
+            # MEASUREMENT
+            p = Process(target=self.evaluator, args=(queue,
+                                                    cur_batch))
+            p.start()
+            p.join()
+            for i in range(0, batch_size):
+                result = queue.get()
+                cur_batch_acc.append(result)
+
+            cur_batch_acc.append(self.evaluator(cur_batch[i]))
             # TRAIN
             self.configs += cur_batch
             self.accs += cur_batch_acc
-            self.refit()
         else:
             # PROPOSE
             proposed_configs = list()
@@ -104,24 +132,37 @@ class XGBTuner(Tuner):
             #top = list()
             cur_batch = list()
             cur_batch_acc = list()
+            
+            # MEASUREMENT
+            queue = Queue()
             for i in range(0, batch_size):
                 cur_batch.append(proposed_configs[best_idx[i]])
-                # MEASUREMENT
-                cur_batch_acc.append(self.evaluator(cur_batch[i]))
-                #top.append(eval_feats[best_idx[i]])
+            p = Process(target=self.evaluator, args=(queue,
+                                                    cur_batch))
+            p.start()
+            p.join()
+            for i in range(0, batch_size):
+                result = queue.get()
+                cur_batch_acc.append(result)
             # TRAIN
             self.configs += cur_batch
             self.accs += cur_batch_acc
+            with open('configs', 'w') as f:
+                for config in self.configs:
+                    f.write(repr(config) + '\n')
+            with open('accs', 'w') as f:
+                for acc in self.accs:
+                    f.write(repr(acc) + '\n') 
             sorted_idx = sorted([idx for idx in range(0, len(self.configs))], key=lambda idx: self.accs[idx], reverse=True)
             print("top 10:")
             for i in range(0, 10):
                 idx = sorted_idx[i]
                 print(self.accs[idx], self.configs[idx])
-            self.refit()
+        self.refit()
 
 def main():
     rqp = RandomQuantProposer([b for b in range(5, 9)], 21) 
-    xgbtuner = XGBTuner(rqp, evaluate_standalone)
+    xgbtuner = XGBTuner(rqp, process_wrapper)
     for i in range(0, 100):
         xgbtuner.tune()
 
