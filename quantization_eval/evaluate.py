@@ -74,7 +74,7 @@ def evaluate(graph, lib, params, ctx, custom_mix_config, args=None, val_data=Non
         m.get_output(0, out_arr)
         acc_top1.update(label, [mx.nd.array(out_arr.asnumpy())])
         acc_top5.update(label, [mx.nd.array(out_arr.asnumpy())])
-        
+
         if args is not None and args.log_interval and not (i + 1) % args.log_interval:
             _, top1 = acc_top1.get()
             _, top5 = acc_top5.get()
@@ -100,7 +100,10 @@ def evaluate_standalone(config):
     try:
         graph, lib, params, ctx = build_model(gluon_model, config, args=None)
     except TVMError as e:
-        return 0.0
+        if 'shift_nbit' in str(e):
+            return 0.0
+        else:
+            raise e
     logging.info("Finish building model...")
     return evaluate(graph, lib, params, ctx, config, args=None)
 
@@ -110,7 +113,7 @@ def generate_custom_mix_config(size=21):
     weight_choices = [w for w in range(6, 9)]
     act_choices = [32]
     config = list()
-    
+
     config.append(list(np.random.choice(input_choices, size)))
     config.append(list(np.random.choice(weight_choices, size)))
     config.append(list(np.random.choice(act_choices, size)))
