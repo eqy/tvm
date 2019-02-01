@@ -59,7 +59,7 @@ def evaluate(graph, lib, params, ctx, custom_mix_config, args=None, val_data=Non
         batch_size = args.batch_size
         val_data, batch_fn = get_val_data(args.rec_val, batch_size, args=args)
     else:
-        batch_size = 32
+        batch_size = 64
         val_data, batch_fn = get_val_data('/scratch/tqchen/imagenet/val.rec', batch_size, args=None)
     # create runtime module
     m = graph_runtime.create(graph, lib, ctx)
@@ -104,6 +104,7 @@ def evaluate(graph, lib, params, ctx, custom_mix_config, args=None, val_data=Non
 
 def evaluate_standalone(config):
     """Evaluate on the validation set."""
+    
     gluon_model = vision.get_model('resnet18_v1', pretrained=True)
     try:
         graph, lib, params, ctx = build_model(gluon_model, config, args=None)
@@ -135,14 +136,14 @@ def build_model(gluon_model, custom_mix_config, args=None):
     from tvm import relay
     from tvm.relay import quantize as qtz
     img_size = 224
-    batch_size = 32
+    batch_size = 64
     #target = 'llvm -mcpu=core-avx2'
-    target = 'cuda'
+    target = 'cuda -model=1080ti'
     if args is not None:
         img_size = 299 if args.model == 'inceptionv3' else 224
         batch_size = args.batch_size
         target = args.target
-        target = 'cuda'
+    print("ARGS TARGET:", target)
     data_shape = (batch_size, 3, img_size, img_size)
     net, params = relay.frontend.from_mxnet(gluon_model, {"data": data_shape})
 
@@ -169,7 +170,6 @@ def build_model(gluon_model, custom_mix_config, args=None):
         dtype_input=args.dtype_input
         dtype_weight=args.dtype_input
         dtype_activation=args.dtype_output
-
     else:
         nbit_input=32
         nbit_weight=8
@@ -177,7 +177,8 @@ def build_model(gluon_model, custom_mix_config, args=None):
         dtype_input='int8'
         dtype_weight='int8'
         dtype_activation='int32'
-
+        print("?????????????????")
+  
     with qtz.qconfig(skip_k_conv=0,
                      nbit_input=nbit_input,
                      nbit_weight=nbit_weight,
@@ -194,13 +195,13 @@ def build_model(gluon_model, custom_mix_config, args=None):
         qgraph = qtz.calibrate(qgraph, custom_mix_config=custom_mix_config)
         print('after calibrate\n')
         #print(qgraph.astext(show_meta_data=False))
-        if args is not None and not args.simulated:
+        if True:#args.simulated:
             qgraph = qtz.realize(qgraph)
             qgraph = relay.ir_pass.infer_type(qgraph)
             print('after realize\n')
             #print(qgraph.astext(show_meta_data=False))
 
-    if args.tune_workload:
+    if args is not None and args.tune_workload:
         tasks = relay_integration.extract_from_program(qgraph, params=params, target=target, ops=(relay.op.nn.conv2d, relay.op.nn.dense))
         print(tasks)
         tuning_option = {
@@ -330,7 +331,7 @@ if __name__ == "__main__":
                         help="Name of the model")
     parser.add_argument("--log-interval", type=int, default=100,
                         help="log interval")
-    parser.add_argument("--batch-size", type=int, default=1,
+    parser.add_argument("--batch-size", type=int, default=64,
                         help="batch size")
     parser.add_argument("--target", type=str, default="llvm -mcpu=core-avx2",
                         help="target option")

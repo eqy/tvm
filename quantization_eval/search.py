@@ -1,5 +1,4 @@
 import numpy as np
-from evaluate import evaluate_standalone
 from model_exp import configs_to_feats0
 import xgboost as xgb
 from multiprocessing import Process, Queue
@@ -49,6 +48,12 @@ class Tuner(object):
         raise NotImplementedError
 
 def process_wrapper(queue, configs):
+    from evaluate import evaluate_standalone
+    import os
+    print("RESETTING AFFINITY... yikes...")
+    os.system("taskset -p 0xffffffff %d" % os.getpid())
+    print("Tuning tasks...")
+
     for config in configs:
         queue.put(evaluate_standalone(config))
 
@@ -102,6 +107,7 @@ class XGBTuner(Tuner):
             print("first batch, collecting measurements...")
             cur_batch = list()
             cur_batch_acc = list()
+            queue = Queue()
             for i in range(0, batch_size):
                 cur_batch.append(self.proposer.propose())
             # MEASUREMENT
@@ -164,7 +170,7 @@ def main():
     rqp = RandomQuantProposer([b for b in range(5, 9)], 21) 
     xgbtuner = XGBTuner(rqp, process_wrapper)
     for i in range(0, 100):
-        xgbtuner.tune()
+        xgbtuner.tune(mode='notest')
 
 if __name__ == '__main__':
     np.random.seed(42)
