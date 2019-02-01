@@ -6,6 +6,14 @@ from mxnet import gluon
 from mxnet.gluon.model_zoo import vision
 import numpy as np
 from tvm._ffi.base import TVMError
+from tvm import relay
+from tvm import autotvm
+from tvm.autotvm.tuner import XGBTuner, GATuner, RandomTuner, GridSearchTuner
+from tvm.contrib.util import tempdir
+import tvm.contrib.graph_runtime as runtime
+from tvm.autotvm.task import relay_integration
+import os
+import sys
 
 # Two functions for reading data from record file or raw images
 def get_val_data(rec_val,
@@ -52,7 +60,7 @@ def evaluate(graph, lib, params, ctx, custom_mix_config, args=None, val_data=Non
         val_data, batch_fn = get_val_data(args.rec_val, batch_size, args=args)
     else:
         batch_size = 32
-        val_data, batch_fn = get_val_data('/scratch/eqy/imagenet/val.rec', batch_size, args=None)
+        val_data, batch_fn = get_val_data('/scratch/tqchen/imagenet/val.rec', batch_size, args=None)
     # create runtime module
     m = graph_runtime.create(graph, lib, ctx)
     m.set_input(**params)
@@ -131,6 +139,7 @@ def build_model(gluon_model, custom_mix_config, args=None):
         img_size = 299 if args.model == 'inceptionv3' else 224
         batch_size = args.batch_size
         target = args.target
+        target = 'cuda'
     data_shape = (batch_size, 3, img_size, img_size)
     net, params = relay.frontend.from_mxnet(gluon_model, {"data": data_shape})
 
@@ -151,12 +160,13 @@ def build_model(gluon_model, custom_mix_config, args=None):
     #print(qgraph.astext(show_meta_data=False))
 
     if args is not None:
-        nbit_input=args.nbit_input,          
-        nbit_weight=args.nbit_input,
-        global_scale=args.global_scale,
-        dtype_input=args.dtype_input,
-        dtype_weight=args.dtype_input,
-        dtype_activation=args.dtype_output,       
+        nbit_input=args.nbit_input          
+        nbit_weight=args.nbit_input
+        global_scale=args.global_scale
+        dtype_input=args.dtype_input
+        dtype_weight=args.dtype_input
+        dtype_activation=args.dtype_output
+
     else:
         nbit_input=32
         nbit_weight=8
@@ -164,7 +174,6 @@ def build_model(gluon_model, custom_mix_config, args=None):
         dtype_input='int8'
         dtype_weight='int8'
         dtype_activation='int32'
-        
 
     with qtz.qconfig(skip_k_conv=0,
                      nbit_input=nbit_input,
@@ -182,17 +191,111 @@ def build_model(gluon_model, custom_mix_config, args=None):
         qgraph = qtz.calibrate(qgraph, custom_mix_config=custom_mix_config)
         print('after calibrate\n')
         #print(qgraph.astext(show_meta_data=False))
-        if True:#args is not None and not args.simulated:
+        if args is not None and not args.simulated:
             qgraph = qtz.realize(qgraph)
             qgraph = relay.ir_pass.infer_type(qgraph)
             print('after realize\n')
             #print(qgraph.astext(show_meta_data=False))
+
+    if args.tune_workload:
+        tasks = relay_integration.extract_from_program(qgraph, params=params, target=target, ops=(relay.op.nn.conv2d, relay.op.nn.dense))
+        print(tasks)
+        tuning_option = {
+            'log_filename': 'tuning_log.txt',
+            'tuner': 'xgb',
+            'n_trial': 4000,
+            'early_stopping': 600,
+            'measure_option': autotvm.measure_option(
+                builder=autotvm.LocalBuilder(timeout=10),
+                runner=autotvm.RPCRunner(
+                    '1080ti',  # change the device key to your key
+                    'fleet', 9190,
+                    number=20, repeat=3, timeout=4, min_repeat_ms=150),
+            ),
+        }
+        print("RESETTING AFFINITY... yikes...")
+        os.system("taskset -p 0xffffffff %d" % os.getpid())
+        print("Tuning tasks...")
+        tune_tasks(tasks, **tuning_option)
+        sys.exit()
 
     with relay.build_config(opt_level=3):
         graph, lib, params = relay.build(qgraph, target)
     ctx = tvm.nd.context(target, 0)
     #print('CUSTOM MIX CONFIG:', custom_mix_config)
     return graph, lib, params, ctx
+
+# You can skip the implementation of this function for this tutorial.
+def tune_tasks(tasks,
+               measure_option,
+               tuner='xgb',
+               n_trial=1000,
+               early_stopping=None,
+               log_filename='tuning.log',
+               use_transfer_learning=True,
+               try_winograd=False,
+               try_int8=True):
+    new_tasks = list()
+    if try_winograd:
+        for i in range(len(tasks)):
+            try:  # try winograd template
+                tsk = autotvm.task.create(tasks[i].name, tasks[i].args,
+                                          tasks[i].target, tasks[i].target_host, 'winograd')
+                input_channel = tsk.workload[1][1]
+                if input_channel >= 64:
+                    new_tasks.append(tsk)
+            except Exception:
+                pass
+    if try_int8:
+        for i in range(len(tasks)):
+            try:  # try int8 template
+                tsk = autotvm.task.create(tasks[i].name, tasks[i].args,
+                                          tasks[i].target, tasks[i].target_host, 'int8')
+                new_tasks.append(tsk)
+            except Exception:
+                pass
+
+    tasks += new_tasks
+    tasks = tasks[:2]
+    # create tmp log file
+    tmp_log_file = log_filename + ".tmp"
+    if os.path.exists(tmp_log_file):
+        os.remove(tmp_log_file)
+
+    for i, tsk in enumerate(reversed(tasks)):
+        prefix = "[Task %2d/%2d] " %(i+1, len(tasks))
+
+        # create tuner
+        if tuner == 'xgb' or tuner == 'xgb-rank':
+            tuner_obj = XGBTuner(tsk, loss_type='rank')
+        elif tuner == 'ga':
+            tuner_obj = GATuner(tsk, pop_size=100)
+        elif tuner == 'random':
+            tuner_obj = RandomTuner(tsk)
+        elif tuner == 'gridsearch':
+            tuner_obj = GridSearchTuner(tsk)
+        else:
+            raise ValueError("Invalid tuner: " + tuner)
+
+        if use_transfer_learning:
+            if os.path.isfile(tmp_log_file):
+                tuner_obj.load_history(autotvm.record.load_from_file(tmp_log_file))
+
+        print(tsk)
+        print(len(tsk.space))
+
+        # do tuning
+        tuner_obj.tune(n_trial=min(n_trial, len(tsk.config_space)),
+                       early_stopping=early_stopping,
+                       measure_option=measure_option,
+                       callbacks=[
+                           autotvm.callback.progress_bar(n_trial, prefix=prefix),
+                           autotvm.callback.log_to_file(tmp_log_file)])
+
+    # pick best records to a cache file
+    autotvm.record.pick_best(tmp_log_file, log_filename)
+    os.remove(tmp_log_file)
+
 
 def main(args):
     mix_configs = set()
@@ -204,8 +307,10 @@ def main(args):
         mix_configs.add(repr(custom_mix_config))
         gluon_model = vision.get_model(args.model, pretrained=True)
         try:
-            graph, lib, params, ctx = build_model(gluon_model, custom_mix_config, args=args)
+            with autotvm.apply_history_best('tuning_log.txt'):
+                graph, lib, params, ctx = build_model(gluon_model, custom_mix_config, args=args)
         except TVMError as e:
+            raise e
             continue
         logging.info("Finish building model %s...", args.model)
         # raise ValueError
@@ -213,7 +318,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate ImageNet validation accuracy")
-    parser.add_argument("--rec-val", type=str, default="~/.mxnet/datasets/imagenet/rec/val.rec",
+    parser.add_argument("--tune-workload", action="store_true", help="just do workload tuning")
+    parser.add_argument("--rec-val", type=str, default="/scratch/tqchen/imagenet/val.rec",
                         help="the validation data")
     parser.add_argument("--num-classes", type=int, default=1000,
                         help="batch size")
