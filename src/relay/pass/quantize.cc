@@ -202,6 +202,8 @@ Expr QuantizeRealize(const Call& ref_call,
     Expr data = n->data;
     float idom_scale_imm = GetScalarFromConstant<float>(n->dom_scale);
     float odom_scale_imm = GetScalarFromConstant<float>(dom_scale);
+    LOG(INFO) << "muh scale " << odom_scale_imm;
+    LOG(INFO) << "target scale " << idom_scale_imm;
     if (idom_scale_imm == odom_scale_imm) {
       // same domain scale, only clip
       data = Clip(data, clip_min_imm, clip_max_imm);
@@ -313,6 +315,9 @@ RELAY_REGISTER_OP("multiply")
 
 
 float ChooseDomScale(const std::vector<const QRealizeIntExprNode*>& nptrs) {
+  QConfig& cfg = QConfig::Current();
+  LOG(INFO) << "dom scale counter: "<< cfg->dom_scale_counter;
+  cfg->dom_scale_counter++;
   if (nptrs.size() == 2) {
     // x = a * s1, y = b * s2
     // x + y = (a * s1 / s2 + b) * s2, if s1 > s2
@@ -321,7 +326,6 @@ float ChooseDomScale(const std::vector<const QRealizeIntExprNode*>& nptrs) {
     float s2 = GetScalarFromConstant<float>(nptrs[1]->dom_scale);
     return s1 > s2 ? s2 : s1;
   } else {
-    const QConfig& cfg = QConfig::Current();
     float scale = cfg->global_scale;
     return scale / std::pow(2.0, cfg->nbit_activation - 1);
   }
@@ -530,6 +534,7 @@ TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable)
   p->stream << "skip_k_conv==" << op->skip_k_conv << ", ";
   p->stream << "round_for_shift==" << op->round_for_shift << ", ";
   p->stream << "store_lowbit_output==" << op->store_lowbit_output << ", ";
+  p->stream << "dom_scale_counter==" << op->dom_scale_counter << ", ";
   p->stream << "debug_enabled_ops==" << op->debug_enabled_ops;
   p->stream << ")";
 });

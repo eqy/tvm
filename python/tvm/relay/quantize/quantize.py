@@ -57,6 +57,7 @@ class QConfig(NodeBase):
         "skip_k_conv": 1,
         "round_for_shift": True,
         "store_lowbit_output": True,
+        "dom_scale_counter": 0,
         "debug_enabled_ops": None,
     }
 
@@ -171,8 +172,9 @@ def annotate(graph):
     _set_conv_counter(0)  # reset counter
     return _quantize.annotate(graph)
 
+dom_scale_counter = 0
 
-def calibrate(graph, dataset=None):
+def calibrate(graph, custom_scale=None, dataset=None):
     """The calibrate procedure will try to calculate the content of
     dom_scale, nbit, clip_min, clip_max for every `simulated_quantize`
     operator.
@@ -190,6 +192,8 @@ def calibrate(graph, dataset=None):
     ret: Function
         The graph after calibration
     """
+    global dom_scale_counter
+    dom_scale_counter = 0
     def power2_scale(arr):
         """calculate weight scale with nearest mode-2 scale"""
         val = np.amax(np.abs(arr.asnumpy()))
@@ -200,6 +204,7 @@ def calibrate(graph, dataset=None):
     quantize_op = _op.get("relay.op.annotation.simulated_quantize")
 
     def visit_func(expr):
+        global dom_scale_counter
         """Internal visit function"""
         if isinstance(expr, _expr.Call) and expr.op == quantize_op:
             _, ndom_scale, nclip_min, nclip_max = expr.args
@@ -214,7 +219,11 @@ def calibrate(graph, dataset=None):
                 assert isinstance(var, _expr.Constant)
                 scale = power2_scale(var.data)
             else:
-                scale = cfg.global_scale
+                if custom_scale is None:
+                    scale = cfg.global_scale
+                else:
+                    scale = custom_scale[dom_scale_counter]
+                dom_scale_counter += 1
 
             def _make_const(val):
                 return _expr.const(val, 'float32')
