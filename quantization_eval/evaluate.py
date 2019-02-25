@@ -159,12 +159,12 @@ def evaluate(graph, lib, params, ctx, batch_size, val_data, batch_fn, num_classe
             print("TOP1:", top1)
             with open('configrecord.csv', "a") as f:
                 f.write('{0}, {1}, {2}, {3}, {4}\n'.format(
-                    model_name, args.nbit_input, args.nbit_output, scale_config, top1))
+                    model_name, args.nbit_input, args.nbit_output, np.array_repr(scale_config, max_line_width=np.inf), top1))
             return top1
     logging.info('[final] validation: acc-top1=%f acc-top5=%f', top1, top5)
     with open('configrecord.csv', "a") as f:
         f.write('{0}, {1}, {2}, {3}, {4}\n'.format(
-            model_name, args.nbit_input, args.nbit_output, scale_config, top1))
+            model_name, args.nbit_input, args.nbit_output, np.array_repr(scale_config, max_line_width=np.inf), top1))
     return top1
 
 def build_model_args(args, gluon_model):
@@ -263,11 +263,20 @@ def main(args):
     val_data, batch_fn = get_val_data(args.model, args.rec_val, args.batch_size)
     if args.test_scale_config:
         for i in range(0, 1000):
-            scale_config = np.random.choice([1.0, 2.0, 4.0, 8.0, 16.0], 100)
-            graph, lib, params, ctx = build_model(args.model, 1, 'llvm -mcpu=core-avx2', False, args.nbit_input, args.global_scale,
-            args.dtype_input, args.dtype_output, False, False, gluon_model, scale_config)
-            evaluate(graph, lib, params, ctx, args.batch_size, val_data, batch_fn, args.num_classes,
-            args.log_interval, args.model, args.nbit_input, args.nbit_output, scale_config)
+            skip = False
+            scale_config = np.random.choice([1.0, 2.0, 4.0, 8.0, 16.0], 40)
+            try:
+                graph, lib, params, ctx = build_model(args.model, 1, 'llvm -mcpu=core-avx2', False, args.nbit_input, args.global_scale,
+                args.dtype_input, args.dtype_output, False, False, gluon_model, scale_config)
+            except TVMError as e:
+                skip = True
+                top1 = 0.0
+            if not skip:
+                evaluate(graph, lib, params, ctx, args.batch_size, val_data, batch_fn, args.num_classes, args.log_interval, args.model, args.nbit_input, args.nbit_output, scale_config)
+            else:
+                with open('configrecord.csv', "a") as f:
+                    f.write('{0}, {1}, {2}, {3}, {4}\n'.format(
+                        model_name, args.nbit_input, args.nbit_output, np.array_repr(scale_config, max_line_width=np.inf), top1))
     else:
         graph, lib, params, ctx = build_model_args(args, gluon_model)
         val_data, batch_fn = get_val_data(args.model, args.rec_val, args.batch_size)
