@@ -126,7 +126,7 @@ def evaluate_args(args, graph, lib, params, ctx, val_data, batch_fn):
 
 
 def evaluate(graph, lib, params, ctx, batch_size, val_data, batch_fn, num_classes,
-             log_interval, model, nbit_input, nbit_output, scale_config, early_stopping=512):
+             log_interval, model_name, nbit_input, nbit_output, scale_config, early_stopping=512):
     """Evaluate on the validation set."""
     import tvm
     from tvm.contrib import graph_runtime
@@ -157,11 +157,14 @@ def evaluate(graph, lib, params, ctx, batch_size, val_data, batch_fn, num_classe
             logging.info('[%d samples] validation: acc-top1=%f acc-top5=%f', nsamples, top1, top5)
         if (i+1)*batch_size >= early_stopping:
             print("TOP1:", top1)
+            with open('configrecord.csv', "a") as f:
+                f.write('{0}, {1}, {2}, {3}, {4}\n'.format(
+                    model_name, args.nbit_input, args.nbit_output, scale_config, top1))
             return top1
     logging.info('[final] validation: acc-top1=%f acc-top5=%f', top1, top5)
-    with open('record.csv', "a") as f:
+    with open('configrecord.csv', "a") as f:
         f.write('{0}, {1}, {2}, {3}, {4}\n'.format(
-            model, args.nbit_input, args.nbit_output, scale_config, top1))
+            model_name, args.nbit_input, args.nbit_output, scale_config, top1))
     return top1
 
 def build_model_args(args, gluon_model):
@@ -248,15 +251,18 @@ def build_model(model, batch_size, target, original, nbit_input, global_scale,
     return graph, lib, params, ctx
 
 
-def evaluate_scale(config):
-    pass
+def evaluate_scale(model, model_name, val_data, batch_fn, config, batch_size=64):
+    #pass
+    graph, lib, params, ctx = build_model(args.model, batch_size, 'llvm -mcpu=core-avx2', False, 8, args.global_scale, 'int8', 'int32', False, False, gluon_model, scale_config)
+    evaluate(graph, lib, params, ctx, batch_size, val_data, batch_fn, 1000,
+    128, model_name, 8, 32, scale_config)
 
 
 def main(args):
     gluon_model = vision.get_model(args.model, pretrained=True)
     val_data, batch_fn = get_val_data(args.model, args.rec_val, args.batch_size)
     if args.test_scale_config:
-        for i in range(0, 3):
+        for i in range(0, 1000):
             scale_config = np.random.choice([1.0, 2.0, 4.0, 8.0, 16.0], 100)
             graph, lib, params, ctx = build_model(args.model, 1, 'llvm -mcpu=core-avx2', False, args.nbit_input, args.global_scale,
             args.dtype_input, args.dtype_output, False, False, gluon_model, scale_config)
