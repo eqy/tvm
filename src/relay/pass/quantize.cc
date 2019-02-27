@@ -316,8 +316,6 @@ RELAY_REGISTER_OP("multiply")
 
 float ChooseDomScale(const std::vector<const QRealizeIntExprNode*>& nptrs) {
   QConfig& cfg = QConfig::Current();
-  LOG(INFO) << "dom scale counter: "<< cfg->dom_scale_counter;
-  cfg->dom_scale_counter++;
   if (nptrs.size() == 2) {
     // x = a * s1, y = b * s2
     // x + y = (a * s1 / s2 + b) * s2, if s1 > s2
