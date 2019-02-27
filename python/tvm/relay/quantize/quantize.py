@@ -223,6 +223,7 @@ def calibrate(graph, custom_scale=None, dataset=None):
                     scale = cfg.global_scale
                 else:
                     scale = custom_scale[dom_scale_counter]
+                    print("count:", dom_scale_counter)
                 dom_scale_counter += 1
 
             def _make_const(val):
